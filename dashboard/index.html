@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DevLens - Mobile Debug Tool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    .log-VERBOSE { color: #888; }
+    .log-DEBUG { color: #4ade80; }
+    .log-INFO { color: #60a5fa; }
+    .log-WARN { color: #fbbf24; }
+    .log-ERROR { color: #f87171; }
+    .log-FATAL { color: #dc2626; font-weight: bold; }
+
+    .status-2xx { color: #4ade80; }
+    .status-3xx { color: #60a5fa; }
+    .status-4xx { color: #fbbf24; }
+    .status-5xx { color: #f87171; }
+
+    #logs-container, #network-container {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+    }
+
+    .tab-active {
+      border-bottom: 2px solid #3b82f6;
+      color: #3b82f6;
+    }
+
+    .type-string { color: #4ade80; }
+    .type-number { color: #60a5fa; }
+    .type-boolean { color: #fbbf24; }
+    .type-object, .type-array { color: #c084fc; }
+  </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+  <!-- Header -->
+  <header class="bg-gray-800 border-b border-gray-700 px-4 py-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <h1 class="text-xl font-bold text-cyan-400">DevLens</h1>
+
+        <!-- Device Selector -->
+        <select id="device-select" class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm">
+          <option value="">Select Device</option>
+        </select>
+
+        <!-- App Selector -->
+        <select id="app-select" class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm" disabled>
+          <option value="">All Apps</option>
+        </select>
+
+        <button id="refresh-btn" class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-sm">
+          Refresh
+        </button>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <button id="proxy-toggle" class="flex items-center gap-2 px-3 py-1.5 rounded text-sm bg-gray-700 hover:bg-gray-600 transition-colors" title="Toggle network capture (turn OFF before disconnecting USB!)">
+          <span id="proxy-indicator" class="w-2 h-2 rounded-full bg-gray-500"></span>
+          <span id="proxy-label">Network: OFF</span>
+        </button>
+        <span id="connection-status" class="flex items-center gap-1 text-sm">
+          <span class="w-2 h-2 rounded-full bg-red-500"></span>
+          Disconnected
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+    <div class="bg-gray-800 rounded-lg p-6 flex flex-col items-center gap-3">
+      <div class="w-8 h-8 border-4 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+      <span id="loading-text" class="text-white">Configuring proxy...</span>
+    </div>
+  </div>
+
+  <!-- Warning Banner -->
+  <div class="bg-yellow-900/50 border-b border-yellow-700 px-4 py-2">
+    <div class="flex items-center justify-between text-sm">
+      <div class="flex items-center gap-2 text-yellow-300">
+        <span class="text-lg">⚠️</span>
+        <span>
+          <strong>Important:</strong> If you enable Network capture, turn it OFF before disconnecting USB!
+          <span class="text-yellow-400/70">(Fix: Reconnect USB → Turn OFF → Or phone WiFi settings → Remove proxy)</span>
+        </span>
+      </div>
+      <div class="flex items-center gap-1 text-green-400 text-xs">
+        <span>🔒</span>
+        <span>All data stays on your machine. We don't collect or store anything.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="border-b border-gray-700">
+    <nav class="flex gap-4 px-4">
+      <button class="tab-btn tab-active py-3 px-2" data-tab="logs">Logs</button>
+      <button class="tab-btn py-3 px-2 text-gray-400" data-tab="network">Network</button>
+      <button class="tab-btn py-3 px-2 text-gray-400" data-tab="storage">Storage</button>
+    </nav>
+  </div>
+
+  <!-- Main Content -->
+  <main class="flex h-[calc(100vh-160px)]">
+    <!-- Logs Tab -->
+    <div id="logs-tab" class="tab-content flex-1 flex flex-col">
+      <!-- Logs Toolbar -->
+      <div class="flex items-center gap-2 p-2 border-b border-gray-700">
+        <input type="text" id="log-filter" placeholder="Filter logs..."
+          class="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm flex-1 max-w-xs">
+        <select id="log-level-filter" class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
+          <option value="">All Levels</option>
+          <option value="VERBOSE">Verbose</option>
+          <option value="DEBUG">Debug</option>
+          <option value="INFO">Info</option>
+          <option value="WARN">Warn</option>
+          <option value="ERROR">Error</option>
+        </select>
+        <button id="clear-logs" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm">Clear</button>
+      </div>
+
+      <!-- Logs Container -->
+      <div id="logs-container" class="flex-1 overflow-auto p-2 space-y-0.5">
+        <div class="text-gray-500 p-4 text-center">Select a device to start viewing logs</div>
+      </div>
+    </div>
+
+    <!-- Network Tab -->
+    <div id="network-tab" class="tab-content flex-1 hidden">
+      <div class="flex h-full">
+        <!-- Request List -->
+        <div class="w-1/2 border-r border-gray-700 flex flex-col">
+          <div class="flex items-center gap-2 p-2 border-b border-gray-700">
+            <input type="text" id="network-filter" placeholder="Filter requests..."
+              class="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm flex-1">
+            <button id="clear-network" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm">Clear</button>
+          </div>
+          <div id="network-list" class="flex-1 overflow-auto">
+            <div class="text-gray-500 p-4 text-center">
+              Network traffic will appear here automatically<br>
+              <span class="text-xs text-gray-600">HTTP: Full details | HTTPS: Domain & timing only</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Request Detail -->
+        <div class="w-1/2 flex flex-col">
+          <div class="flex border-b border-gray-700">
+            <button class="detail-tab detail-tab-active px-4 py-2 text-sm" data-detail="headers">Headers</button>
+            <button class="detail-tab px-4 py-2 text-sm text-gray-400" data-detail="payload">Payload</button>
+            <button class="detail-tab px-4 py-2 text-sm text-gray-400" data-detail="response">Response</button>
+          </div>
+          <div id="request-detail" class="flex-1 overflow-auto p-4">
+            <div class="text-gray-500 text-center">Select a request to view details</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Storage Tab -->
+    <div id="storage-tab" class="tab-content flex-1 hidden">
+      <div class="flex h-full">
+        <!-- Storage Categories -->
+        <div class="w-64 border-r border-gray-700 flex flex-col">
+          <div class="p-2 border-b border-gray-700">
+            <button id="refresh-storage" class="w-full bg-cyan-600 hover:bg-cyan-700 px-3 py-2 rounded text-sm">
+              Load Storage
+            </button>
+          </div>
+          <div id="storage-categories" class="flex-1 overflow-auto p-2">
+            <div class="text-gray-500 text-center text-sm p-4">
+              Select an app and click "Load Storage"<br>
+              <span class="text-xs">(Only works for debuggable apps)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Storage Values -->
+        <div class="flex-1 flex flex-col">
+          <div class="flex items-center gap-2 p-2 border-b border-gray-700">
+            <input type="text" id="storage-filter" placeholder="Filter keys..."
+              class="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm flex-1">
+          </div>
+          <div id="storage-values" class="flex-1 overflow-auto p-2">
+            <div class="text-gray-500 text-center p-4">Select a category to view values</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // State
+    let socket;
+    let logs = [];
+    let networkRequests = [];
+    let selectedRequest = null;
+    let currentDevice = null;
+    let currentDeviceType = 'android';
+    let currentApp = null;
+    let storageData = null;
+    let selectedCategory = null;
+    let proxyEnabled = false;
+    let proxyLoading = false;
+
+    // DOM Elements
+    const deviceSelect = document.getElementById('device-select');
+    const appSelect = document.getElementById('app-select');
+    const logsContainer = document.getElementById('logs-container');
+    const networkList = document.getElementById('network-list');
+    const connectionStatus = document.getElementById('connection-status');
+
+    // Initialize
+    async function init() {
+      // Connect to WebSocket
+      socket = io();
+
+      socket.on('connect', () => {
+        connectionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500"></span> Connected';
+      });
+
+      socket.on('disconnect', () => {
+        connectionStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Disconnected';
+      });
+
+      socket.on('log', (entry) => {
+        logs.push(entry);
+        renderLogs();
+      });
+
+      socket.on('network-request', (req) => {
+        networkRequests.push(req);
+        renderNetwork();
+      });
+
+      socket.on('network-response', (req) => {
+        const idx = networkRequests.findIndex(r => r.id === req.id);
+        if (idx !== -1) {
+          networkRequests[idx] = req;
+          renderNetwork();
+        }
+      });
+
+      socket.on('storage-data', (data) => {
+        storageData = data;
+        renderStorageCategories();
+      });
+
+      socket.on('storage-error', (error) => {
+        document.getElementById('storage-categories').innerHTML =
+          `<div class="text-red-400 text-center text-sm p-4">${error}</div>`;
+      });
+
+      // Proxy loading state
+      socket.on('proxy-loading', ({ deviceId, loading }) => {
+        if (deviceId === currentDevice) {
+          proxyLoading = loading;
+          const overlay = document.getElementById('loading-overlay');
+          const loadingText = document.getElementById('loading-text');
+          if (loading) {
+            loadingText.textContent = proxyEnabled ? 'Disabling proxy...' : 'Enabling proxy...';
+            overlay.classList.remove('hidden');
+          } else {
+            overlay.classList.add('hidden');
+          }
+          updateProxyUI();
+        }
+      });
+
+      // Proxy status updates
+      socket.on('proxy-status', ({ deviceId, enabled }) => {
+        if (deviceId === currentDevice) {
+          proxyEnabled = enabled;
+          proxyLoading = false;
+          document.getElementById('loading-overlay').classList.add('hidden');
+          updateProxyUI();
+        }
+      });
+
+      // Load devices
+      await loadDevices();
+
+      // Setup event listeners
+      setupEventListeners();
+
+      // Get local IP for proxy instructions
+      document.getElementById('proxy-ip').textContent = window.location.hostname;
+    }
+
+    async function loadDevices() {
+      const res = await fetch('/api/devices');
+      const devices = await res.json();
+
+      deviceSelect.innerHTML = '<option value="">Select Device</option>';
+      devices.forEach(d => {
+        const option = document.createElement('option');
+        option.value = d.id;
+        option.dataset.type = d.type;
+        option.textContent = `${d.name || d.id} (${d.type})`;
+        deviceSelect.appendChild(option);
+      });
+    }
+
+    async function loadApps(deviceId, type) {
+      const res = await fetch(`/api/devices/${deviceId}/apps?type=${type}`);
+      const apps = await res.json();
+
+      appSelect.innerHTML = '<option value="">All Apps</option>';
+      apps.forEach(app => {
+        const option = document.createElement('option');
+        option.value = app.packageName;
+        option.textContent = app.name || app.packageName;
+        appSelect.appendChild(option);
+      });
+      appSelect.disabled = false;
+    }
+
+    function setupEventListeners() {
+      // Device selection
+      deviceSelect.addEventListener('change', async (e) => {
+        currentDevice = e.target.value;
+        currentDeviceType = e.target.selectedOptions[0]?.dataset.type || 'android';
+
+        if (currentDevice) {
+          await loadApps(currentDevice, currentDeviceType);
+          startLogStream();
+        } else {
+          appSelect.disabled = true;
+          socket.emit('stop-logs');
+        }
+      });
+
+      // App selection
+      appSelect.addEventListener('change', (e) => {
+        currentApp = e.target.value;
+        startLogStream();
+      });
+
+      // Refresh button
+      document.getElementById('refresh-btn').addEventListener('click', loadDevices);
+
+      // Proxy toggle button
+      document.getElementById('proxy-toggle').addEventListener('click', () => {
+        if (!currentDevice) {
+          alert('Please select a device first');
+          return;
+        }
+
+        if (!proxyEnabled) {
+          // Turning ON - show warning
+          const confirmed = confirm('⚠️ WARNING!\n\nNetwork capture will be enabled.\n\n• Some apps may show security warnings\n• Turn OFF before disconnecting USB!\n• If you disconnect without turning OFF, phone internet will stop working\n\nContinue?');
+          if (!confirmed) return;
+        }
+
+        socket.emit('toggle-proxy', { deviceId: currentDevice, enabled: !proxyEnabled });
+      });
+
+      // Tabs
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab-btn').forEach(b => {
+            b.classList.remove('tab-active');
+            b.classList.add('text-gray-400');
+          });
+          document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+          btn.classList.add('tab-active');
+          btn.classList.remove('text-gray-400');
+          document.getElementById(`${btn.dataset.tab}-tab`).classList.remove('hidden');
+        });
+      });
+
+      // Detail tabs
+      document.querySelectorAll('.detail-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.detail-tab').forEach(b => {
+            b.classList.remove('detail-tab-active');
+            b.classList.add('text-gray-400');
+          });
+          btn.classList.add('detail-tab-active');
+          btn.classList.remove('text-gray-400');
+          renderRequestDetail(btn.dataset.detail);
+        });
+      });
+
+      // Clear buttons
+      document.getElementById('clear-logs').addEventListener('click', () => {
+        logs = [];
+        renderLogs();
+      });
+
+      document.getElementById('clear-network').addEventListener('click', () => {
+        networkRequests = [];
+        selectedRequest = null;
+        renderNetwork();
+        document.getElementById('request-detail').innerHTML =
+          '<div class="text-gray-500 text-center">Select a request to view details</div>';
+      });
+
+      // Filters
+      document.getElementById('log-filter').addEventListener('input', renderLogs);
+      document.getElementById('log-level-filter').addEventListener('change', renderLogs);
+      document.getElementById('network-filter').addEventListener('input', renderNetwork);
+      document.getElementById('storage-filter').addEventListener('input', renderStorageValues);
+
+      // Storage refresh
+      document.getElementById('refresh-storage').addEventListener('click', () => {
+        if (currentDevice && currentApp) {
+          socket.emit('get-storage', {
+            deviceId: currentDevice,
+            packageName: currentApp,
+            type: currentDeviceType
+          });
+        } else {
+          alert('Please select a device and app first');
+        }
+      });
+    }
+
+    function startLogStream() {
+      if (currentDevice) {
+        logs = [];
+        renderLogs();
+        socket.emit('start-logs', {
+          deviceId: currentDevice,
+          packageName: currentApp || undefined,
+          deviceType: currentDeviceType
+        });
+        // Get proxy status for this device
+        socket.emit('get-proxy-status', { deviceId: currentDevice });
+      }
+    }
+
+    function updateProxyUI() {
+      const btn = document.getElementById('proxy-toggle');
+      const indicator = document.getElementById('proxy-indicator');
+      const label = document.getElementById('proxy-label');
+
+      // Reset classes
+      btn.classList.remove('bg-gray-700', 'bg-red-600', 'bg-blue-600', 'animate-pulse', 'opacity-50', 'cursor-not-allowed');
+      indicator.classList.remove('bg-gray-500', 'bg-yellow-400', 'animate-spin');
+
+      if (proxyLoading) {
+        // Loading state
+        btn.classList.add('bg-blue-600', 'opacity-50', 'cursor-not-allowed');
+        indicator.classList.add('bg-white', 'animate-spin');
+        label.textContent = 'Loading...';
+        btn.disabled = true;
+      } else if (proxyEnabled) {
+        // ON - make it look dangerous/active
+        btn.classList.add('bg-red-600', 'animate-pulse');
+        indicator.classList.add('bg-yellow-400');
+        label.textContent = '⚠️ Network: ON';
+        btn.disabled = false;
+      } else {
+        // OFF - normal look
+        btn.classList.add('bg-gray-700');
+        indicator.classList.add('bg-gray-500');
+        label.textContent = 'Network: OFF';
+        btn.disabled = false;
+      }
+    }
+
+    function renderLogs() {
+      const filter = document.getElementById('log-filter').value.toLowerCase();
+      const levelFilter = document.getElementById('log-level-filter').value;
+
+      const filtered = logs.filter(log => {
+        if (filter && !log.message.toLowerCase().includes(filter) && !log.tag.toLowerCase().includes(filter)) {
+          return false;
+        }
+        if (levelFilter && log.level !== levelFilter) {
+          return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        logsContainer.innerHTML = '<div class="text-gray-500 p-4 text-center">No logs yet</div>';
+        return;
+      }
+
+      logsContainer.innerHTML = filtered.slice(-500).map(log => `
+        <div class="log-${log.level} py-0.5 hover:bg-gray-800 px-2 rounded">
+          <span class="text-gray-500">${log.timestamp}</span>
+          <span class="font-semibold">[${log.level}]</span>
+          <span class="text-cyan-400">${log.tag}:</span>
+          ${escapeHtml(log.message)}
+        </div>
+      `).join('');
+
+      logsContainer.scrollTop = logsContainer.scrollHeight;
+    }
+
+    function renderNetwork() {
+      const filter = document.getElementById('network-filter').value.toLowerCase();
+
+      const filtered = networkRequests.filter(req => {
+        if (filter && !req.url.toLowerCase().includes(filter)) {
+          return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        networkList.innerHTML = `
+          <div class="text-gray-500 p-4 text-center">
+            No requests yet - traffic will appear automatically
+          </div>`;
+        return;
+      }
+
+      networkList.innerHTML = filtered.map(req => {
+        const isHttps = req.method === 'CONNECT' || req.url.startsWith('https://');
+        const statusClass = req.response ?
+          (req.response.status < 300 ? 'status-2xx' :
+           req.response.status < 400 ? 'status-3xx' :
+           req.response.status < 500 ? 'status-4xx' : 'status-5xx') : '';
+
+        let displayUrl = req.url;
+        let pathname = req.url;
+        try {
+          const url = new URL(req.url);
+          pathname = url.hostname + (url.pathname !== '/' ? url.pathname : '');
+        } catch {}
+
+        return `
+          <div class="p-2 border-b border-gray-700 hover:bg-gray-800 cursor-pointer ${selectedRequest?.id === req.id ? 'bg-gray-800' : ''}"
+               onclick="selectRequest('${req.id}')">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-mono ${isHttps ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-700'} px-1 rounded">${isHttps ? '🔒' : req.method}</span>
+              <span class="${statusClass} text-sm">${req.response?.status || '...'}</span>
+              <span class="text-gray-300 text-sm truncate flex-1">${pathname}</span>
+              <span class="text-gray-500 text-xs">${req.response?.duration || 0}ms</span>
+            </div>
+            <div class="text-gray-500 text-xs truncate">${isHttps ? '(encrypted tunnel)' : req.url}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function selectRequest(id) {
+      selectedRequest = networkRequests.find(r => r.id === id);
+      renderNetwork();
+      renderRequestDetail('headers');
+    }
+
+    function renderRequestDetail(tab = 'headers') {
+      const detail = document.getElementById('request-detail');
+      if (!selectedRequest) {
+        detail.innerHTML = '<div class="text-gray-500 text-center">Select a request to view details</div>';
+        return;
+      }
+
+      const req = selectedRequest;
+
+      if (tab === 'headers') {
+        detail.innerHTML = `
+          <div class="space-y-4">
+            <div>
+              <h3 class="text-sm font-semibold text-gray-400 mb-2">General</h3>
+              <div class="bg-gray-800 rounded p-3 space-y-1 text-sm font-mono">
+                <div><span class="text-gray-400">URL:</span> ${escapeHtml(req.url)}</div>
+                <div><span class="text-gray-400">Method:</span> ${req.method}</div>
+                <div><span class="text-gray-400">Status:</span> <span class="${req.response?.status < 400 ? 'text-green-400' : 'text-red-400'}">${req.response?.status || 'Pending'} ${req.response?.statusText || ''}</span></div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="text-sm font-semibold text-gray-400 mb-2">Request Headers</h3>
+              <div class="bg-gray-800 rounded p-3 text-sm font-mono max-h-48 overflow-auto">
+                ${Object.entries(req.headers).map(([k, v]) =>
+                  `<div><span class="text-cyan-400">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`
+                ).join('')}
+              </div>
+            </div>
+
+            ${req.response ? `
+              <div>
+                <h3 class="text-sm font-semibold text-gray-400 mb-2">Response Headers</h3>
+                <div class="bg-gray-800 rounded p-3 text-sm font-mono max-h-48 overflow-auto">
+                  ${Object.entries(req.response.headers).map(([k, v]) =>
+                    `<div><span class="text-cyan-400">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`
+                  ).join('')}
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      } else if (tab === 'payload') {
+        detail.innerHTML = `
+          <div>
+            <h3 class="text-sm font-semibold text-gray-400 mb-2">Request Body</h3>
+            <pre class="bg-gray-800 rounded p-3 text-sm font-mono overflow-auto max-h-96">${req.body ? formatJson(req.body) : '<span class="text-gray-500">No request body</span>'}</pre>
+          </div>
+        `;
+      } else if (tab === 'response') {
+        detail.innerHTML = `
+          <div>
+            <h3 class="text-sm font-semibold text-gray-400 mb-2">Response Body</h3>
+            <pre class="bg-gray-800 rounded p-3 text-sm font-mono overflow-auto max-h-96">${req.response?.body ? formatJson(req.response.body) : '<span class="text-gray-500">No response body</span>'}</pre>
+          </div>
+        `;
+      }
+    }
+
+    function renderStorageCategories() {
+      const container = document.getElementById('storage-categories');
+
+      if (!storageData) {
+        container.innerHTML = '<div class="text-gray-500 text-center text-sm p-4">No storage data</div>';
+        return;
+      }
+
+      let html = '';
+
+      // Android storage
+      if (storageData.sharedPreferences) {
+        const prefKeys = Object.keys(storageData.sharedPreferences);
+        if (prefKeys.length > 0) {
+          html += `<div class="mb-4">
+            <h4 class="text-xs font-semibold text-gray-400 mb-2">SharedPreferences</h4>
+            ${prefKeys.map(key => `
+              <div class="storage-category p-2 rounded hover:bg-gray-800 cursor-pointer text-sm ${selectedCategory === 'prefs_' + key ? 'bg-gray-800' : ''}"
+                   onclick="selectStorageCategory('prefs_${key}')">
+                ${escapeHtml(key)}
+                <span class="text-gray-500 text-xs">(${storageData.sharedPreferences[key].length})</span>
+              </div>
+            `).join('')}
+          </div>`;
+        }
+      }
+
+      if (storageData.asyncStorage && storageData.asyncStorage.length > 0) {
+        html += `<div class="mb-4">
+          <h4 class="text-xs font-semibold text-gray-400 mb-2">AsyncStorage</h4>
+          <div class="storage-category p-2 rounded hover:bg-gray-800 cursor-pointer text-sm ${selectedCategory === 'async' ? 'bg-gray-800' : ''}"
+               onclick="selectStorageCategory('async')">
+            AsyncStorage
+            <span class="text-gray-500 text-xs">(${storageData.asyncStorage.length})</span>
+          </div>
+        </div>`;
+      }
+
+      // iOS storage
+      if (storageData.userDefaults && storageData.userDefaults.length > 0) {
+        html += `<div class="mb-4">
+          <h4 class="text-xs font-semibold text-gray-400 mb-2">UserDefaults</h4>
+          <div class="storage-category p-2 rounded hover:bg-gray-800 cursor-pointer text-sm ${selectedCategory === 'userDefaults' ? 'bg-gray-800' : ''}"
+               onclick="selectStorageCategory('userDefaults')">
+            UserDefaults
+            <span class="text-gray-500 text-xs">(${storageData.userDefaults.length})</span>
+          </div>
+        </div>`;
+      }
+
+      if (storageData.keychain && storageData.keychain.length > 0) {
+        html += `<div class="mb-4">
+          <h4 class="text-xs font-semibold text-gray-400 mb-2">Keychain</h4>
+          <div class="storage-category p-2 rounded hover:bg-gray-800 cursor-pointer text-sm ${selectedCategory === 'keychain' ? 'bg-gray-800' : ''}"
+               onclick="selectStorageCategory('keychain')">
+            Keychain
+            <span class="text-gray-500 text-xs">(${storageData.keychain.length})</span>
+          </div>
+        </div>`;
+      }
+
+      container.innerHTML = html || '<div class="text-gray-500 text-center text-sm p-4">No storage data found</div>';
+    }
+
+    function selectStorageCategory(category) {
+      selectedCategory = category;
+      renderStorageCategories();
+      renderStorageValues();
+    }
+
+    function renderStorageValues() {
+      const container = document.getElementById('storage-values');
+      const filter = document.getElementById('storage-filter').value.toLowerCase();
+
+      if (!selectedCategory || !storageData) {
+        container.innerHTML = '<div class="text-gray-500 text-center p-4">Select a category to view values</div>';
+        return;
+      }
+
+      let items = [];
+
+      if (selectedCategory.startsWith('prefs_')) {
+        const prefName = selectedCategory.replace('prefs_', '');
+        items = storageData.sharedPreferences?.[prefName] || [];
+      } else if (selectedCategory === 'async') {
+        items = storageData.asyncStorage || [];
+      } else if (selectedCategory === 'userDefaults') {
+        items = storageData.userDefaults || [];
+      } else if (selectedCategory === 'keychain') {
+        items = storageData.keychain || [];
+      }
+
+      const filtered = items.filter(item =>
+        !filter || item.key.toLowerCase().includes(filter) || item.value.toLowerCase().includes(filter)
+      );
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 text-center p-4">No items found</div>';
+        return;
+      }
+
+      container.innerHTML = `
+        <table class="w-full text-sm">
+          <thead class="text-gray-400 text-left">
+            <tr>
+              <th class="p-2 border-b border-gray-700">Key</th>
+              <th class="p-2 border-b border-gray-700">Value</th>
+              <th class="p-2 border-b border-gray-700 w-20">Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filtered.map(item => `
+              <tr class="hover:bg-gray-800">
+                <td class="p-2 border-b border-gray-700 font-mono text-cyan-400">${escapeHtml(item.key)}</td>
+                <td class="p-2 border-b border-gray-700 font-mono max-w-md truncate" title="${escapeHtml(item.value)}">
+                  ${formatStorageValue(item.value)}
+                </td>
+                <td class="p-2 border-b border-gray-700 type-${item.type}">${item.type}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function formatStorageValue(value) {
+      try {
+        const parsed = JSON.parse(value);
+        return `<pre class="text-xs overflow-auto max-h-20">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
+      } catch {
+        return escapeHtml(value);
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function formatJson(str) {
+      try {
+        return escapeHtml(JSON.stringify(JSON.parse(str), null, 2));
+      } catch {
+        return escapeHtml(str);
+      }
+    }
+
+    // Start
+    init();
+  </script>
+</body>
+</html>
