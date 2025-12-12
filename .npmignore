@@ -1,0 +1,12 @@
+# Source files (only dist needed)
+src/
+tsconfig.json
+tsup.config.ts
+task.md
+
+# Dev files
+.git/
+.gitignore
+.DS_Store
+node_modules/
+*.log

@@ -1,6 +1,6 @@
 {
   "name": "devlens",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Debug any mobile app - logs, network, storage. No SDK required.",
   "type": "module",
   "main": "dist/index.js",
