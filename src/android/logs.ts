@@ -32,6 +32,15 @@ export class LogStreamer extends EventEmitter {
 
     // If package name specified, filter by PID
     if (this.packageName) {
+      // Always show initial message
+      this.emit('log', {
+        timestamp: new Date().toLocaleTimeString(),
+        level: 'INFO',
+        tag: 'DevLens',
+        message: `Watching logs for "${this.packageName}"...`,
+        pid: 0,
+      });
+
       try {
         const { stdout } = await execAsync(
           `adb -s ${this.deviceId} shell pidof -s ${this.packageName}`
@@ -39,13 +48,20 @@ export class LogStreamer extends EventEmitter {
         appPid = stdout.trim();
         if (appPid) {
           args.push(`--pid=${appPid}`);
+          this.emit('log', {
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'INFO',
+            tag: 'DevLens',
+            message: `App running (PID: ${appPid}). Streaming logs...`,
+            pid: parseInt(appPid),
+          });
         } else {
           // App not running, emit warning
           this.emit('log', {
             timestamp: new Date().toLocaleTimeString(),
             level: 'WARN',
             tag: 'DevLens',
-            message: `App "${this.packageName}" is not running. Start the app to see logs.`,
+            message: `App is not running. Start the app to see logs.`,
             pid: 0,
           });
         }
@@ -55,9 +71,9 @@ export class LogStreamer extends EventEmitter {
           timestamp: new Date().toLocaleTimeString(),
           level: 'WARN',
           tag: 'DevLens',
-          message: `App "${this.packageName}" is not running. Start the app to see logs.`,
+          message: `App is not running. Start the app to see logs.`,
           pid: 0,
-        });
+          });
       }
     }
 
