@@ -8,6 +8,29 @@ Debug any mobile app - logs, network, storage. No SDK required.
 npx devlens
 ```
 
+## Why DevLens?
+
+To see logs from your physical Android/iOS device, you normally need to:
+- **Android:** Open Android Studio → Connect device → Open Logcat
+- **iOS:** Open Xcode → Connect device → Open Console
+
+That's a 2-3 GB IDE (or 15+ GB for Xcode) just to see logs!
+
+**With DevLens:** USB connect → `npx devlens` → See logs in browser. That's it.
+
+| Without DevLens | With DevLens |
+|-----------------|--------------|
+| Open Android Studio / Xcode | Just `npx devlens` |
+| 2-15 GB IDE install | No IDE needed |
+| Wait 2-5 min for IDE to load | Ready in 5 seconds |
+| Need project/source code | Works with any installed app |
+
+**Use cases:**
+- 🔧 **Quick debugging** - Don't want to open heavy IDE just for logs
+- 🧪 **QA testing** - Test debug builds without any IDE knowledge
+- 📱 **Client's phone** - Plug their device, see logs, fix issue
+- ⚡ **React Native / Flutter** - See native logs alongside JS logs
+
 ## Features
 
 | Feature                | Android | iOS |

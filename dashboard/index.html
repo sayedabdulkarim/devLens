@@ -207,6 +207,20 @@
     let selectedCategory = null;
     let proxyEnabled = false;
     let proxyLoading = false;
+    let renderLogsTimeout = null;
+    let renderNetworkTimeout = null;
+    let appSelectTimeout = null;
+
+    // Debounced render functions
+    function debouncedRenderLogs() {
+      if (renderLogsTimeout) clearTimeout(renderLogsTimeout);
+      renderLogsTimeout = setTimeout(renderLogs, 100);
+    }
+
+    function debouncedRenderNetwork() {
+      if (renderNetworkTimeout) clearTimeout(renderNetworkTimeout);
+      renderNetworkTimeout = setTimeout(renderNetwork, 100);
+    }
 
     // DOM Elements
     const deviceSelect = document.getElementById('device-select');
@@ -230,19 +244,19 @@
 
       socket.on('log', (entry) => {
         logs.push(entry);
-        renderLogs();
+        debouncedRenderLogs();  // Debounced!
       });
 
       socket.on('network-request', (req) => {
         networkRequests.push(req);
-        renderNetwork();
+        debouncedRenderNetwork();  // Debounced!
       });
 
       socket.on('network-response', (req) => {
         const idx = networkRequests.findIndex(r => r.id === req.id);
         if (idx !== -1) {
           networkRequests[idx] = req;
-          renderNetwork();
+          debouncedRenderNetwork();  // Debounced!
         }
       });
 
@@ -335,10 +349,13 @@
         }
       });
 
-      // App selection
+      // App selection (debounced for keyboard navigation)
       appSelect.addEventListener('change', (e) => {
         currentApp = e.target.value;
-        startLogStream();
+        if (appSelectTimeout) clearTimeout(appSelectTimeout);
+        appSelectTimeout = setTimeout(() => {
+          startLogStream();
+        }, 300);  // Wait 300ms for user to finish typing
       });
 
       // Refresh button
